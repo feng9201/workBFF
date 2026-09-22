@@ -1,0 +1,38 @@
+﻿{
+  "dependencies": [
+    {
+      "name": "mttool",
+      "features": [
+        "spsc",
+        "eventpp"
+      ]
+    },
+    {
+      "name": "curl",
+      "default-features": false,
+      "features": ["openssl"]
+    },
+    {
+      "name": "cpr"
+    },
+    {
+      "name": "nlohmann-json"
+    },
+    {
+      "name": "log-cpp",
+      "features":[
+        "shared"
+      ]
+    }
+  ],
+  "overrides": [
+    {
+      "name": "mttool",
+      "version-string": "1.1.0#1"
+    },
+    {
+      "name": "log-cpp",
+      "version-string": "0.0.2#4"
+    }
+  ]
+}

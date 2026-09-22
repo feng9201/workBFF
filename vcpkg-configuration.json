@@ -1,0 +1,15 @@
+{
+  "default-registry": {
+    "kind": "git",
+    "repository": "https://github.com/feng9201/vcpkg.git",
+    "baseline": "74a04a88ea10fc2bca3fbfa4eb15f4168a4da43e"
+  },
+  "registries": [
+	{
+      "kind": "git",
+      "repository": "https://github.com/feng9201/vcpkg-registrys.git",
+	  "baseline": "6578d6603decbd8c1fcd4b3f857268fefa945800",
+      "packages": ["mttool","cpr","log-cpp"]
+    }
+  ]
+}

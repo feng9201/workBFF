@@ -1,0 +1,951 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WorkBFF</title>
+    <style>
+        /* 全局样式 */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+        }
+        body {
+            background: #1a1a2e;
+            font-family: 'Segoe UI', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        /* 模拟Dock栏 */
+        .dock-bar {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(30, 30, 60, 0.7);
+            backdrop-filter: blur(10px);
+            padding: 12px 24px;
+            border-radius: 24px;
+            border: 1px solid rgba(255,255,255,0.1);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            display: flex;
+            gap: 16px;
+            z-index: 1000;
+        }
+        .dock-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: #6c5ce7;
+            cursor: pointer;
+            position: relative;
+            transition: transform 0.2s;
+            box-shadow: 0 0 0 2px rgba(108, 92, 231, 0.3);
+        }
+        .dock-icon:hover {
+            transform: scale(1.15);
+            animation: rainbow-border 1.2s linear infinite;
+            box-shadow: 0 0 20px rgba(108, 92, 231, 0.6);
+        }
+        @keyframes rainbow-border {
+            0% { box-shadow: 0 0 0 2px #ff6b6b, 0 0 20px #ff6b6b; }
+            25% { box-shadow: 0 0 0 2px #feca57, 0 0 20px #feca57; }
+            50% { box-shadow: 0 0 0 2px #48dbfb, 0 0 20px #48dbfb; }
+            75% { box-shadow: 0 0 0 2px #ff9ff3, 0 0 20px #ff9ff3; }
+            100% { box-shadow: 0 0 0 2px #ff6b6b, 0 0 20px #ff6b6b; }
+        }
+        .dock-icon::after {
+            content: 'WorkBFF';
+            position: absolute;
+            bottom: -24px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-size: 10px;
+            opacity: 0.7;
+            white-space: nowrap;
+        }
+
+        /* 主窗口 - 类似uTools风格 */
+        .main-window {
+            width: 480px;
+            height: 480px;
+            background: rgba(26, 26, 46, 0.92);
+            backdrop-filter: blur(16px);
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.08);
+            box-shadow: 0 24px 80px rgba(0,0,0,0.8);
+            display: none;
+            flex-direction: column;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 999;
+            overflow: hidden;
+            color: #e0e0e0;
+        }
+        .main-window.active {
+            display: flex;
+        }
+
+        /* 标题栏 - 可拖拽 */
+        .title-bar {
+            height: 32px;
+            background: rgba(255,255,255,0.04);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 12px;
+            cursor: grab;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            flex-shrink: 0;
+        }
+        .title-bar:active {
+            cursor: grabbing;
+        }
+        .title-bar .app-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: #c8c8d4;
+            letter-spacing: 0.5px;
+        }
+        .title-bar .menu-btn {
+            background: transparent;
+            border: none;
+            color: #a0a0b8;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 0 6px;
+            border-radius: 4px;
+            transition: 0.2s;
+        }
+        .title-bar .menu-btn:hover {
+            background: rgba(255,255,255,0.08);
+            color: white;
+        }
+        .window-controls {
+            display: flex;
+            gap: 6px;
+        }
+        .window-controls span {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .window-controls .close {
+            background: #ff5f57;
+        }
+        .window-controls .close:hover {
+            background: #ff7a72;
+        }
+        .window-controls .minimize {
+            background: #ffbd2e;
+        }
+        .window-controls .minimize:hover {
+            background: #ffd34a;
+        }
+
+        /* 下拉菜单（点击标题栏菜单按钮出现） */
+        .dropdown-menu {
+            position: absolute;
+            top: 32px;
+            left: 12px;
+            background: rgba(30, 30, 60, 0.96);
+            backdrop-filter: blur(12px);
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.08);
+            box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+            padding: 6px 0;
+            min-width: 140px;
+            display: none;
+            z-index: 100;
+        }
+        .dropdown-menu.active {
+            display: block;
+        }
+        .dropdown-menu .menu-item {
+            padding: 8px 20px;
+            color: #d0d0e0;
+            font-size: 13px;
+            cursor: pointer;
+            transition: 0.15s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .dropdown-menu .menu-item:hover {
+            background: rgba(108, 92, 231, 0.3);
+            color: white;
+        }
+        .dropdown-menu .menu-item .icon {
+            font-size: 14px;
+            opacity: 0.6;
+        }
+
+        /* 搜索框区域 */
+        .search-area {
+            padding: 12px 16px 8px;
+            display: flex;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+        .search-area input {
+            flex: 1;
+            height: 32px;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 8px;
+            padding: 0 14px;
+            color: #e8e8f0;
+            font-size: 13px;
+            outline: none;
+            transition: 0.2s;
+        }
+        .search-area input:focus {
+            border-color: #6c5ce7;
+            background: rgba(255,255,255,0.08);
+            box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.15);
+        }
+        .search-area input::placeholder {
+            color: #6a6a82;
+            font-weight: 300;
+        }
+        .search-area button {
+            height: 32px;
+            padding: 0 16px;
+            background: #6c5ce7;
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-weight: 500;
+            font-size: 13px;
+            cursor: pointer;
+            transition: 0.2s;
+            white-space: nowrap;
+        }
+        .search-area button:hover {
+            background: #7d6ff0;
+            transform: scale(1.02);
+        }
+
+        /* 列表框 */
+        .list-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 4px 8px 12px;
+            margin: 0 4px;
+        }
+        .list-container::-webkit-scrollbar {
+            width: 4px;
+        }
+        .list-container::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .list-container::-webkit-scrollbar-thumb {
+            background: #4a4a6a;
+            border-radius: 4px;
+        }
+
+        .list-item {
+            padding: 8px 14px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            cursor: pointer;
+            transition: 0.15s;
+            font-size: 13px;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+        }
+        .list-item:hover {
+            background: rgba(108, 92, 231, 0.15);
+        }
+        .list-item .item-content {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            overflow: hidden;
+        }
+        .list-item .item-content .type-badge {
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.06);
+            color: #8888aa;
+            flex-shrink: 0;
+        }
+        .list-item .item-content .text {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .list-item .item-actions {
+            display: flex;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+        .list-item .item-actions .action-btn {
+            background: transparent;
+            border: none;
+            color: #8888aa;
+            cursor: pointer;
+            font-size: 12px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            transition: 0.15s;
+        }
+        .list-item .item-actions .action-btn:hover {
+            background: rgba(255,255,255,0.06);
+            color: white;
+        }
+        .list-item .item-actions .copy-btn {
+            color: #6c5ce7;
+        }
+        .list-item .item-actions .copy-btn:hover {
+            color: #a29bfe;
+        }
+
+        /* 加密标记 */
+        .encrypted-badge {
+            font-size: 10px;
+            background: rgba(255, 107, 107, 0.2);
+            color: #ff6b6b;
+            padding: 1px 8px;
+            border-radius: 10px;
+            margin-left: 6px;
+        }
+
+        /* 添加界面 */
+        .add-panel {
+            display: none;
+            flex-direction: column;
+            padding: 20px 24px;
+            gap: 14px;
+            flex: 1;
+            overflow-y: auto;
+        }
+        .add-panel.active {
+            display: flex;
+        }
+        .add-panel .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .add-panel .form-group label {
+            font-size: 12px;
+            color: #8888aa;
+            letter-spacing: 0.3px;
+        }
+        .add-panel .form-group input, 
+        .add-panel .form-group select {
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 8px;
+            padding: 8px 12px;
+            color: #e0e0f0;
+            font-size: 13px;
+            outline: none;
+            transition: 0.2s;
+        }
+        .add-panel .form-group input:focus,
+        .add-panel .form-group select:focus {
+            border-color: #6c5ce7;
+            background: rgba(255,255,255,0.08);
+        }
+        .add-panel .form-row {
+            display: flex;
+            gap: 12px;
+        }
+        .add-panel .form-row .form-group {
+            flex: 1;
+        }
+        .add-panel .form-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 8px;
+        }
+        .add-panel .form-actions button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .add-panel .form-actions .btn-primary {
+            background: #6c5ce7;
+            color: white;
+        }
+        .add-panel .form-actions .btn-primary:hover {
+            background: #7d6ff0;
+        }
+        .add-panel .form-actions .btn-secondary {
+            background: rgba(255,255,255,0.06);
+            color: #b0b0c8;
+        }
+        .add-panel .form-actions .btn-secondary:hover {
+            background: rgba(255,255,255,0.1);
+        }
+        .back-to-main {
+            align-self: flex-start;
+            background: transparent;
+            border: none;
+            color: #6c5ce7;
+            cursor: pointer;
+            font-size: 13px;
+            padding: 4px 0;
+            margin-bottom: 4px;
+        }
+        .back-to-main:hover {
+            color: #a29bfe;
+        }
+
+        /* 登录弹窗 */
+        .login-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(8px);
+            z-index: 2000;
+            justify-content: center;
+            align-items: center;
+        }
+        .login-overlay.active {
+            display: flex;
+        }
+        .login-dialog {
+            background: rgba(26, 26, 46, 0.95);
+            backdrop-filter: blur(16px);
+            padding: 32px 40px;
+            border-radius: 20px;
+            border: 1px solid rgba(255,255,255,0.06);
+            width: 340px;
+            box-shadow: 0 24px 80px rgba(0,0,0,0.8);
+        }
+        .login-dialog h3 {
+            color: #e0e0f0;
+            margin-bottom: 20px;
+            font-weight: 400;
+            letter-spacing: 0.5px;
+        }
+        .login-dialog input {
+            width: 100%;
+            padding: 10px 14px;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 10px;
+            color: #e0e0f0;
+            font-size: 14px;
+            outline: none;
+            margin-bottom: 14px;
+            transition: 0.2s;
+        }
+        .login-dialog input:focus {
+            border-color: #6c5ce7;
+            background: rgba(255,255,255,0.08);
+        }
+        .login-dialog .login-actions {
+            display: flex;
+            gap: 12px;
+        }
+        .login-dialog .login-actions button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 10px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .login-dialog .login-actions .btn-login {
+            background: #6c5ce7;
+            color: white;
+        }
+        .login-dialog .login-actions .btn-login:hover {
+            background: #7d6ff0;
+        }
+        .login-dialog .login-actions .btn-cancel {
+            background: rgba(255,255,255,0.06);
+            color: #b0b0c8;
+        }
+        .login-dialog .login-actions .btn-cancel:hover {
+            background: rgba(255,255,255,0.1);
+        }
+        .login-status {
+            font-size: 12px;
+            color: #6a6a82;
+            margin-bottom: 12px;
+        }
+
+        /* 杂项 */
+        .hidden {
+            display: none !important;
+        }
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #4a4a6a;
+            font-size: 14px;
+            gap: 8px;
+        }
+        .empty-state span {
+            font-size: 32px;
+            opacity: 0.4;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Dock栏 -->
+    <div class="dock-bar">
+        <div class="dock-icon" id="dockIcon" title="WorkBFF"></div>
+    </div>
+
+    <!-- 主窗口 -->
+    <div class="main-window" id="mainWindow">
+        <!-- 标题栏 -->
+        <div class="title-bar" id="titleBar">
+            <div style="display:flex; align-items:center; gap:8px;">
+                <span class="app-name">⚡ WorkBFF</span>
+                <button class="menu-btn" id="menuBtn">☰</button>
+                <!-- 下拉菜单 -->
+                <div class="dropdown-menu" id="dropdownMenu">
+                    <div class="menu-item" data-action="login"><span class="icon">🔐</span> 登录</div>
+                    <div class="menu-item" data-action="add"><span class="icon">➕</span> 添加</div>
+                    <div class="menu-item" data-action="help"><span class="icon">❓</span> 帮助</div>
+                    <div class="menu-item" data-action="version"><span class="icon">📌</span> 版本 1.0.0</div>
+                </div>
+            </div>
+            <div class="window-controls">
+                <span class="minimize" id="minimizeBtn"></span>
+                <span class="close" id="closeBtn"></span>
+            </div>
+        </div>
+
+        <!-- 搜索界面 -->
+        <div id="mainPanel" style="display:flex; flex-direction:column; flex:1;">
+            <div class="search-area">
+                <input type="text" id="searchInput" placeholder="搜索关键词或路径..." />
+                <button id="searchBtn">搜索</button>
+            </div>
+            <div class="list-container" id="listContainer">
+                <!-- 动态渲染列表 -->
+                <div id="listContent"></div>
+            </div>
+        </div>
+
+        <!-- 添加界面 -->
+        <div class="add-panel" id="addPanel">
+            <button class="back-to-main" id="backToMainBtn">← 返回主界面</button>
+            <div class="form-group">
+                <label>搜索关键词 (最多3个，用逗号分隔)</label>
+                <input type="text" id="addKeywords" placeholder="例如: 项目, 文档, 报表" />
+            </div>
+            <div class="form-group">
+                <label>内容</label>
+                <input type="text" id="addContent" placeholder="路径或网址" />
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>类型</label>
+                    <select id="addType">
+                        <option value="folder">📁 文件夹</option>
+                        <option value="exe">⚙️ 可执行文件</option>
+                        <option value="http">🌐 HTTP地址</option>
+                        <option value="text">📝 纯文本</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>加密</label>
+                    <select id="addEncrypted">
+                        <option value="0">否</option>
+                        <option value="1">是</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="btn-primary" id="saveBtn">保存</button>
+                <button class="btn-secondary" id="cancelAddBtn">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 登录弹窗 -->
+    <div class="login-overlay" id="loginOverlay">
+        <div class="login-dialog">
+            <h3>🔐 登录 WorkBFF</h3>
+            <div class="login-status" id="loginStatus">输入密码查看加密内容</div>
+            <input type="password" id="loginPassword" placeholder="请输入密码" />
+            <div class="login-actions">
+                <button class="btn-login" id="loginBtn">登录</button>
+                <button class="btn-cancel" id="loginCancelBtn">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ============================================================
+        // 数据层 (模拟SQLite)
+        // ============================================================
+        let db = {
+            items: [
+                { id: 1, keywords: '项目, 文档', content: 'C:/Work/Projects', type: 'folder', encrypted: 0 },
+                { id: 2, keywords: '开发, 工具', content: 'C:/Tools/notepad++.exe', type: 'exe', encrypted: 0 },
+                { id: 3, keywords: '学习, 前端', content: 'https://developer.mozilla.org', type: 'http', encrypted: 0 },
+                { id: 4, keywords: '笔记, 加密', content: 'secret_notes.txt', type: 'text', encrypted: 1 },
+                { id: 5, keywords: '图片, 素材', content: 'D:/Images/Backgrounds', type: 'folder', encrypted: 0 },
+            ],
+            nextId: 6,
+            isLoggedIn: false,
+            password: '123456' // 简单演示
+        };
+
+        // ============================================================
+        // UI 控制
+        // ============================================================
+        const mainWindow = document.getElementById('mainWindow');
+        const dockIcon = document.getElementById('dockIcon');
+        const titleBar = document.getElementById('titleBar');
+        const closeBtn = document.getElementById('closeBtn');
+        const minimizeBtn = document.getElementById('minimizeBtn');
+        const menuBtn = document.getElementById('menuBtn');
+        const dropdownMenu = document.getElementById('dropdownMenu');
+        const searchInput = document.getElementById('searchInput');
+        const searchBtn = document.getElementById('searchBtn');
+        const listContent = document.getElementById('listContent');
+        const mainPanel = document.getElementById('mainPanel');
+        const addPanel = document.getElementById('addPanel');
+        const backToMainBtn = document.getElementById('backToMainBtn');
+        const saveBtn = document.getElementById('saveBtn');
+        const cancelAddBtn = document.getElementById('cancelAddBtn');
+        const loginOverlay = document.getElementById('loginOverlay');
+        const loginPassword = document.getElementById('loginPassword');
+        const loginBtn = document.getElementById('loginBtn');
+        const loginCancelBtn = document.getElementById('loginCancelBtn');
+        const loginStatus = document.getElementById('loginStatus');
+
+        // 添加表单元素
+        const addKeywords = document.getElementById('addKeywords');
+        const addContent = document.getElementById('addContent');
+        const addType = document.getElementById('addType');
+        const addEncrypted = document.getElementById('addEncrypted');
+
+        // 窗口拖拽
+        let isDragging = false;
+        let offsetX, offsetY;
+
+        titleBar.addEventListener('mousedown', (e) => {
+            if (e.target.closest('.menu-btn') || e.target.closest('.window-controls')) return;
+            isDragging = true;
+            const rect = mainWindow.getBoundingClientRect();
+            offsetX = e.clientX - rect.left;
+            offsetY = e.clientY - rect.top;
+            mainWindow.style.cursor = 'grabbing';
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            mainWindow.style.left = (e.clientX - offsetX) + 'px';
+            mainWindow.style.top = (e.clientY - offsetY) + 'px';
+            mainWindow.style.transform = 'none';
+        });
+
+        document.addEventListener('mouseup', () => {
+            isDragging = false;
+            mainWindow.style.cursor = '';
+        });
+
+        // 窗口控制
+        function openMainWindow() {
+            mainWindow.classList.add('active');
+            mainWindow.style.display = 'flex';
+            renderList();
+        }
+
+        function closeMainWindow() {
+            mainWindow.classList.remove('active');
+            mainWindow.style.display = 'none';
+            dropdownMenu.classList.remove('active');
+        }
+
+        dockIcon.addEventListener('click', () => {
+            if (mainWindow.classList.contains('active')) {
+                closeMainWindow();
+            } else {
+                openMainWindow();
+            }
+        });
+
+        closeBtn.addEventListener('click', closeMainWindow);
+        minimizeBtn.addEventListener('click', () => {
+            mainWindow.style.display = 'none';
+            mainWindow.classList.remove('active');
+        });
+
+        // 菜单
+        menuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            dropdownMenu.classList.toggle('active');
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!dropdownMenu.contains(e.target) && e.target !== menuBtn) {
+                dropdownMenu.classList.remove('active');
+            }
+        });
+
+        // 菜单项
+        document.querySelectorAll('.menu-item[data-action]').forEach(item => {
+            item.addEventListener('click', (e) => {
+                const action = item.dataset.action;
+                dropdownMenu.classList.remove('active');
+                switch(action) {
+                    case 'login':
+                        loginOverlay.classList.add('active');
+                        loginPassword.value = '';
+                        loginStatus.textContent = '输入密码查看加密内容';
+                        break;
+                    case 'add':
+                        showAddPanel();
+                        break;
+                    case 'help':
+                        alert('WorkBFF 帮助\n\n- 点击条目复制内容\n- 文件夹/EXE/HTTP 自动打开\n- 加密条目需登录后可见');
+                        break;
+                    case 'version':
+                        alert('WorkBFF v1.0.0\n基于 Electron 概念设计');
+                        break;
+                }
+            });
+        });
+
+        // 登录逻辑
+        loginBtn.addEventListener('click', () => {
+            const pwd = loginPassword.value;
+            if (pwd === db.password) {
+                db.isLoggedIn = true;
+                loginOverlay.classList.remove('active');
+                loginStatus.textContent = '✅ 已登录';
+                renderList();
+            } else {
+                loginStatus.textContent = '❌ 密码错误，请重试';
+                loginStatus.style.color = '#ff6b6b';
+            }
+        });
+
+        loginCancelBtn.addEventListener('click', () => {
+            loginOverlay.classList.remove('active');
+        });
+
+        loginOverlay.addEventListener('click', (e) => {
+            if (e.target === loginOverlay) loginOverlay.classList.remove('active');
+        });
+
+        // 搜索 / 渲染列表
+        function renderList(filter = '') {
+            let items = db.items;
+            if (filter.trim()) {
+                const kw = filter.trim().toLowerCase();
+                items = items.filter(item => 
+                    item.keywords.toLowerCase().includes(kw) || 
+                    item.content.toLowerCase().includes(kw)
+                );
+            }
+
+            // 加密过滤
+            if (!db.isLoggedIn) {
+                items = items.filter(item => item.encrypted === 0);
+            }
+
+            if (items.length === 0) {
+                listContent.innerHTML = `
+                    <div class="empty-state">
+                        <span>🔍</span>
+                        <div>没有匹配的条目</div>
+                        <div style="font-size:12px; color:#3a3a5a;">试试其他关键词</div>
+                    </div>
+                `;
+                return;
+            }
+
+            let html = '';
+            items.forEach(item => {
+                const typeMap = {
+                    folder: '📁 文件夹',
+                    exe: '⚙️ 可执行',
+                    http: '🌐 链接',
+                    text: '📝 文本'
+                };
+                const typeLabel = typeMap[item.type] || item.type;
+                const encryptedTag = item.encrypted ? '<span class="encrypted-badge">🔒 加密</span>' : '';
+                html += `
+                    <div class="list-item" data-id="${item.id}" data-type="${item.type}" data-content="${item.content}">
+                        <div class="item-content">
+                            <span class="type-badge">${typeLabel}</span>
+                            <span class="text">${item.content}</span>
+                            ${encryptedTag}
+                            <span style="font-size:11px; color:#5a5a7a; margin-left:auto; flex-shrink:0;">${item.keywords}</span>
+                        </div>
+                        <div class="item-actions">
+                            <button class="action-btn copy-btn" data-action="copy">📋 复制</button>
+                            <button class="action-btn" data-action="open">▶ 打开</button>
+                        </div>
+                    </div>
+                `;
+            });
+            listContent.innerHTML = html;
+
+            // 事件绑定 - 复制/打开
+            listContent.querySelectorAll('.list-item').forEach(row => {
+                const id = parseInt(row.dataset.id);
+                const item = db.items.find(i => i.id === id);
+                if (!item) return;
+
+                // 复制按钮
+                const copyBtn = row.querySelector('[data-action="copy"]');
+                copyBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    handleCopy(item);
+                });
+
+                // 打开按钮
+                const openBtn = row.querySelector('[data-action="open"]');
+                openBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    handleOpen(item);
+                });
+
+                // 点击行也触发复制 (根据需求)
+                row.addEventListener('click', () => {
+                    handleCopy(item);
+                });
+            });
+        }
+
+        // 处理复制 & 打开
+        function handleCopy(item) {
+            const content = item.content;
+            // 复制到剪贴板
+            navigator.clipboard.writeText(content).then(() => {
+                // 根据类型执行操作
+                handleOpen(item);
+            }).catch(() => {
+                // fallback
+                handleOpen(item);
+            });
+        }
+
+        function handleOpen(item) {
+            const content = item.content;
+            switch(item.type) {
+                case 'folder':
+                    // 模拟打开文件夹
+                    alert(`📂 打开文件夹: ${content}\n(实际环境会调用系统文件管理器)`);
+                    break;
+                case 'exe':
+                    alert(`⚙️ 启动程序: ${content}\n(实际环境会执行进程)`);
+                    break;
+                case 'http':
+                    window.open(content, '_blank');
+                    break;
+                case 'text':
+                    navigator.clipboard.writeText(content).then(() => {
+                        alert(`📝 已复制文本: ${content}`);
+                    });
+                    break;
+                default:
+                    navigator.clipboard.writeText(content);
+            }
+        }
+
+        // 搜索
+        searchBtn.addEventListener('click', () => {
+            renderList(searchInput.value);
+        });
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') renderList(searchInput.value);
+        });
+
+        // 切换到添加面板
+        function showAddPanel() {
+            mainPanel.style.display = 'none';
+            addPanel.classList.add('active');
+            // 清空表单
+            addKeywords.value = '';
+            addContent.value = '';
+            addType.value = 'folder';
+            addEncrypted.value = '0';
+        }
+
+        function hideAddPanel() {
+            mainPanel.style.display = 'flex';
+            addPanel.classList.remove('active');
+        }
+
+        backToMainBtn.addEventListener('click', hideAddPanel);
+        cancelAddBtn.addEventListener('click', hideAddPanel);
+
+        // 保存添加
+        saveBtn.addEventListener('click', () => {
+            const keywords = addKeywords.value.trim();
+            const content = addContent.value.trim();
+            const type = addType.value;
+            const encrypted = parseInt(addEncrypted.value);
+
+            if (!keywords || !content) {
+                alert('请填写关键词和内容');
+                return;
+            }
+
+            // 关键词限制最多3个 (仅提示, 不强制)
+            const kwArr = keywords.split(',').map(s => s.trim()).filter(s => s);
+            if (kwArr.length > 3) {
+                alert('最多3个关键词，请精简');
+                return;
+            }
+
+            const newItem = {
+                id: db.nextId++,
+                keywords: kwArr.join(', '),
+                content: content,
+                type: type,
+                encrypted: encrypted
+            };
+            db.items.push(newItem);
+            hideAddPanel();
+            renderList(searchInput.value);
+            alert('✅ 添加成功！');
+        });
+
+        // 初始化显示
+        renderList();
+
+        // 初始窗口位置居中
+        mainWindow.style.top = '50%';
+        mainWindow.style.left = '50%';
+        mainWindow.style.transform = 'translate(-50%, -50%)';
+
+        // 演示：登录状态
+        console.log('WorkBFF 已启动, 默认密码: 123456');
+    </script>
+</body>
+</html>

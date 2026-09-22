@@ -1,0 +1,40 @@
+{
+    "version": 5,
+    "cmakeMinimumRequired": {
+      "major": 3,
+      "minor": 15,
+      "patch": 0
+    },
+    "include": [
+    ],
+    "configurePresets": [
+      {
+        "name": "workBFF",
+        "displayName": "Windows x64 (VS 2022)",
+        "description": "Windows x64 build using Visual Studio 2022 and Qt5 via vcpkg",
+        "generator": "Visual Studio 17 2022",
+        "binaryDir": "${sourceDir}/build/windows-x64",
+        "architecture": {
+          "value": "x64",
+          "strategy": "set"
+        },
+        "cacheVariables": {
+          "VCPKG_TARGET_TRIPLET": "x64-windows",
+          "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+          "CMAKE_EXPORT_COMPILE_COMMANDS":{
+            "type": "INTERNAL",
+            "value": "1"
+          }
+        },
+        "environment": {
+          "VCPKG_ROOT": "D:/vcpkg"
+        }
+      }
+    ],
+    "buildPresets": [
+      {
+        "name": "workBFF",
+        "configurePreset": "workBFF"
+      }
+    ]
+  }
