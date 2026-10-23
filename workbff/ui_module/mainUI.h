@@ -8,6 +8,7 @@
 #include "model/Item.h"
 
 class AddPanel;
+class QAction;
 class QLabel;
 class QLineEdit;
 class QMenu;
@@ -65,6 +66,7 @@ private:
     TitleBar* m_titleBar = nullptr;
     QMenu* m_menu = nullptr;
     QLineEdit* m_searchEdit = nullptr;
+    QAction* m_clearSearchAct = nullptr; // 搜索框尾部“清空”按钮，仅在有内容时显示
     QStackedWidget* m_stack = nullptr;
     QWidget* m_listContainer = nullptr;
     QVBoxLayout* m_listLayout = nullptr;

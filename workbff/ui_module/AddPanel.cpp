@@ -116,6 +116,10 @@ AddPanel::AddPanel(QWidget* parent)
     m_displayPriority->setCurrentIndex(0);
 
     m_encrypted = new QCheckBox(QStringLiteral("加密（登录后才能看到）"), this);
+    // 颜色对齐“优先级”标签：面板级 QCheckBox 规则对这个控件没生效，文字会掉回黑色看不清，
+    // 直接在控件上设样式优先级最高，必定覆盖
+    m_encrypted->setStyleSheet(QStringLiteral(
+        "QCheckBox { color: #8888aa; background: transparent; }"));
 
     auto* typeRow = new QHBoxLayout;
     typeRow->setSpacing(8);

@@ -9,12 +9,14 @@
 #include "ui_module/TitleBar.h"
 
 #include <QApplication>
+#include <QAction>
 #include <QClipboard>
 #include <QCursor>
 #include <QDesktopServices>
 #include <QFrame>
 #include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -22,6 +24,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
+#include <QPixmap>
 #include <QProcess>
 #include <QPushButton>
 #include <QScreen>
@@ -31,6 +34,29 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+
+namespace {
+
+// 手绘“✕”图标：暗色主题下系统样式图标常常缺失或灰到看不清，这里直接画一个
+QIcon makeCloseIcon()
+{
+    constexpr int kSize = 16;
+    QPixmap pm(kSize, kSize);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(QPen(QColor(0xb0, 0xb0, 0xc8), 1.6, Qt::SolidLine, Qt::RoundCap));
+    const double m = 4.5;
+    p.drawLine(QPointF(m, m), QPointF(kSize - m, kSize - m));
+    p.drawLine(QPointF(kSize - m, m), QPointF(m, kSize - m));
+    p.end();
+
+    QIcon icon;
+    icon.addPixmap(pm);
+    return icon;
+}
+
+} // namespace
 
 MainUI::MainUI(QWidget* parent)
     : QWidget(parent)
@@ -211,6 +237,19 @@ void MainUI::buildSearchPage()
         " border-radius: 8px; padding: 0 16px; font-weight: 500; }"
         "QPushButton:hover { background: #7d6ff0; }"));
     connect(searchBtn, &QPushButton::clicked, this, &MainUI::refreshList);
+
+    // 尾部清空按钮：输入内容后显示，点击清空（清空会触发 textChanged，列表自动重新筛选）
+    m_clearSearchAct = m_searchEdit->addAction(makeCloseIcon(), QLineEdit::TrailingPosition);
+    m_clearSearchAct->setToolTip(QStringLiteral("清空搜索"));
+    m_clearSearchAct->setVisible(false);
+    connect(m_clearSearchAct, &QAction::triggered, this, [this]() {
+        m_searchEdit->clear();
+        m_searchEdit->setFocus(); // 清空后继续接着输入
+    });
+    connect(m_searchEdit, &QLineEdit::textChanged, this, [this](const QString& text) {
+        m_clearSearchAct->setVisible(!text.isEmpty());
+    });
+
     searchRow->addWidget(m_searchEdit, 1);
     searchRow->addWidget(searchBtn);
     lay->addLayout(searchRow);
