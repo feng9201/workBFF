@@ -20,7 +20,7 @@ class QVBoxLayout;
 class TitleBar;
 
 // 480×480 无边框主界面（Qt::Tool，不进任务栏）
-// 两个页面：搜索页（标题栏+搜索框+可变行高列表）/ 添加页
+// 三个页面：搜索页（标题栏+搜索框+可变行高列表）/ 添加页 / 快捷键管理页
 class MainUI : public QWidget
 {
     Q_OBJECT
@@ -52,8 +52,11 @@ private slots:
     void onDeleteItem(const wb::Item& item);
     void onMenuLogin();
     void onMenuAdd();
+    void onMenuHotkeys();
     void onMenuHelp();
     void onMenuVersion();
+    // 全局快捷键命中：按条目类型直接执行复制/打开
+    void onHotkeyTriggered(qint64 itemId);
     void showToast(const QString& msg);
 
 private:
@@ -61,6 +64,10 @@ private:
     void buildMenu();
     void buildSearchPage();
     void buildAddPage();
+    void buildHotkeyPage();
+    void refreshHotkeyList();
+    // 按数据库内容重建全部热键注册（启动时调用）
+    void reloadHotkeys();
     void hideWindow();
 
     TitleBar* m_titleBar = nullptr;
@@ -72,6 +79,9 @@ private:
     QVBoxLayout* m_listLayout = nullptr;
     QLabel* m_emptyLabel = nullptr;
     AddPanel* m_addPanel = nullptr;
+    QWidget* m_hotkeyContainer = nullptr;  // 快捷键管理页列表容器
+    QVBoxLayout* m_hotkeyLayout = nullptr;
+    QLabel* m_hotkeyTip = nullptr;         // 顶部说明（含已绑定数量）
     QLabel* m_toast = nullptr;
     QTimer* m_toastTimer = nullptr;
 

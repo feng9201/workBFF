@@ -24,11 +24,22 @@ public:
 
     // ── 增查删 ──
     // item.encrypted 时用 aesKey 加密 content 后入库；aesKey 为空则按明文存
-    bool addItem(const wb::Item& item, const QByteArray& aesKey);
+    // newId 非空时回写新行的 id（绑定快捷键时需要用 id 注册热键）
+    bool addItem(const wb::Item& item, const QByteArray& aesKey, qint64* newId = nullptr);
     // filter 匹配关键词；加密条目的 content 为密文，故只能按关键词命中。
     // aesKey 为空时隐藏加密条目；有 key 时解密返回明文内容。
     QVector<wb::Item> queryItems(const QString& filter, const QByteArray& aesKey);
     bool removeItem(qint64 id);
+
+    // ── 快捷键 ──
+    // 所有已绑定快捷键的条目（按定义：均为非加密条目，内容为明文）
+    QVector<wb::Item> queryHotkeyItems();
+    // 按 id 取单条；加密条目或未命中时返回 false
+    bool itemById(qint64 id, wb::Item* out);
+    // 该快捷键是否已被某条条目占用（excludeId 用于“改绑自身”场景）
+    bool shortcutExists(const QString& shortcut, qint64 excludeId = -1);
+    // 设置/清空某条目的快捷键（传空串即解绑）
+    bool setItemShortcut(qint64 id, const QString& shortcut);
 
 private:
     DatabaseManager() = default;

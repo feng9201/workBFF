@@ -16,6 +16,9 @@ struct Item {
     int priority = 1;        // 级（旧优先级）1/2/3，默认 1：搜索框为空时只显示第1级
     int displayPriority = 1; // 显示优先级 1~5，默认 1：同级内排序用
     bool encrypted = false;  // 是否加密（登录后才能看到）
+    // 全局快捷键，规范化大写串 "CTRL+ALT+W"（修饰按 CTRL/ALT/SHIFT/WIN 固定顺序），空=未绑定
+    // 加密条目不允许绑定（未登录时解不出明文）
+    QString shortcut;
 };
 
 inline QString itemTypeToString(ItemType t)

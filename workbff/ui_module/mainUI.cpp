@@ -1,6 +1,7 @@
 ﻿#include "ui_module/mainUI.h"
 
 #include "Version.h"
+#include "base/hotkeyManager.h"
 #include "crypto/AesCipher.h"
 #include "db/DatabaseManager.h"
 #include "ui_module/AddPanel.h"
@@ -12,6 +13,7 @@
 #include <QAction>
 #include <QClipboard>
 #include <QCursor>
+#include <QDebug>
 #include <QDesktopServices>
 #include <QFrame>
 #include <QGuiApplication>
@@ -85,10 +87,16 @@ MainUI::MainUI(QWidget* parent)
 
     buildSearchPage();
     buildAddPage();
+    buildHotkeyPage();
     buildMenu();
 
     // 输入即筛选
     connect(m_searchEdit, &QLineEdit::textChanged, this, &MainUI::refreshList);
+
+    // 全局快捷键：启动时按库里的绑定关系注册，命中后直接执行条目动作
+    connect(&HotkeyManager::instance(), &HotkeyManager::triggered,
+            this, &MainUI::onHotkeyTriggered);
+    reloadHotkeys();
 
     // 轻提示（复制/登录状态等）
     m_toast = new QLabel(this);
@@ -202,6 +210,7 @@ void MainUI::buildMenu()
 
     auto* loginAct = m_menu->addAction(QStringLiteral("🔐 登录"));
     auto* addAct = m_menu->addAction(QStringLiteral("➕ 添加"));
+    auto* hotkeyAct = m_menu->addAction(QStringLiteral("⌨ 快捷键管理"));
     m_menu->addSeparator();
     auto* helpAct = m_menu->addAction(QStringLiteral("❓ 帮助"));
     auto* versionAct = m_menu->addAction(
@@ -209,6 +218,7 @@ void MainUI::buildMenu()
 
     connect(loginAct, &QAction::triggered, this, &MainUI::onMenuLogin);
     connect(addAct, &QAction::triggered, this, &MainUI::onMenuAdd);
+    connect(hotkeyAct, &QAction::triggered, this, &MainUI::onMenuHotkeys);
     connect(helpAct, &QAction::triggered, this, &MainUI::onMenuHelp);
     connect(versionAct, &QAction::triggered, this, &MainUI::onMenuVersion);
 
@@ -304,12 +314,39 @@ void MainUI::buildAddPage()
             showToast(QStringLiteral("🔒 加密内容需要先设置/登录密码"));
             return;
         }
-        if (db.addItem(item, m_aesKey)) {
-            // 保存成功后停留在添加页，仅提示，可继续添加
+        // 快捷键：数量与重复在入库前拦，注册失败则回滚绑定
+        if (!item.shortcut.isEmpty()) {
+            if (db.queryHotkeyItems().size() >= HotkeyManager::kMaxHotkeys) {
+                showToast(QStringLiteral("⌨ 最多只能设置 %1 个快捷键，请先在「快捷键管理」里删除一个")
+                              .arg(HotkeyManager::kMaxHotkeys));
+                return;
+            }
+            if (db.shortcutExists(item.shortcut)) {
+                showToast(QStringLiteral("⌨ %1 已被其他条目使用")
+                              .arg(HotkeyManager::toDisplayText(item.shortcut)));
+                return;
+            }
+        }
+
+        qint64 newId = -1;
+        if (!db.addItem(item, m_aesKey, &newId)) {
+            showToast(QStringLiteral("❌ 保存失败"));
+            return;
+        }
+        if (item.shortcut.isEmpty()) {
             m_addPanel->reset();
             showToast(QStringLiteral("✅ 添加成功"));
+            return;
+        }
+        QString err;
+        if (HotkeyManager::instance().registerHotkey(newId, item.shortcut, &err)) {
+            m_addPanel->reset();
+            showToast(QStringLiteral("✅ 已添加，快捷键 %1 生效")
+                          .arg(HotkeyManager::toDisplayText(item.shortcut)));
         } else {
-            showToast(QStringLiteral("❌ 保存失败"));
+            // 被别的程序占用：注册不上就把绑定从库里清掉，避免留下用不了的记录
+            db.setItemShortcut(newId, QString());
+            showToast(QStringLiteral("⌨ %1").arg(err));
         }
     });
     m_stack->addWidget(m_addPanel);
@@ -382,6 +419,7 @@ void MainUI::onOpenItem(const wb::Item& item)
 void MainUI::onDeleteItem(const wb::Item& item)
 {
     if (DatabaseManager::instance().removeItem(item.id)) {
+        HotkeyManager::instance().unregisterHotkey(item.id); // 条目没了，热键跟着释放
         showToast(QStringLiteral("已删除: %1").arg(item.content));
         refreshList();
     }
@@ -420,6 +458,12 @@ void MainUI::onMenuAdd()
     m_stack->setCurrentWidget(m_addPanel);
 }
 
+void MainUI::onMenuHotkeys()
+{
+    refreshHotkeyList();
+    m_stack->setCurrentIndex(2);
+}
+
 void MainUI::onMenuHelp()
 {
     QMessageBox::about(this, QStringLiteral("帮助"),
@@ -427,13 +471,181 @@ void MainUI::onMenuHelp()
                                       "- 单击条目：复制内容到剪贴板\n"
                                       "- 双击条目：文件夹→打开资源管理器，"
                                       "exe→启动程序，http→浏览器打开\n"
-                                      "- 加密条目需登录后才能看到"));
+                                      "- 加密条目需登录后才能看到\n"
+                                      "- 添加条目时勾选“支持快捷键”即可绑定全局热键（最多 5 个）：\n"
+                                      "  文本类按下即复制，其他类型按下即打开，窗口隐藏时也能用\n"
+                                      "- 解绑请到菜单“⌨ 快捷键管理”，只删绑定不删条目"));
 }
 
 void MainUI::onMenuVersion()
 {
     QMessageBox::about(this, QStringLiteral("版本"),
                        QStringLiteral("WorkBFF v%1").arg(QStringLiteral(WORKBFF_VERSION)));
+}
+
+void MainUI::buildHotkeyPage()
+{
+    auto* page = new QWidget(m_stack);
+    auto* lay = new QVBoxLayout(page);
+    lay->setContentsMargins(12, 10, 12, 10);
+    lay->setSpacing(8);
+
+    auto* backBtn = new QPushButton(QStringLiteral("← 返回主界面"), page);
+    backBtn->setFixedHeight(34); // 加高一点，点击区域更舒服
+    backBtn->setCursor(Qt::PointingHandCursor);
+    backBtn->setFocusPolicy(Qt::NoFocus); // 不给焦点：消除进页时默认聚焦的虚线框
+    backBtn->setStyleSheet(QStringLiteral(
+        "QPushButton { background: transparent; border: none; outline: none;"
+        " color: #6c5ce7; font-size: 13px; text-align: left; padding: 0; }"
+        "QPushButton:hover { color: #a29bfe; border: none; }"
+        "QPushButton:pressed { color: #8577e0; border: none; }"
+        "QPushButton:focus, QPushButton:default { border: none; outline: none; }"));
+    connect(backBtn, &QPushButton::clicked, this, [this]() {
+        m_stack->setCurrentIndex(0);
+        refreshList();
+    });
+    lay->addWidget(backBtn);
+
+    auto* tip = new QLabel(page);
+    tip->setWordWrap(true);
+    tip->setStyleSheet(QStringLiteral(
+        "background: rgba(108,92,231,0.07); color: #a29bfe; font-size: 12px;"
+        " border: 1px solid rgba(108,92,231,0.22); border-radius: 10px; padding: 8px 10px;"));
+    m_hotkeyTip = tip;
+    lay->addWidget(tip);
+
+    auto* scroll = new QScrollArea(page);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->viewport()->setAutoFillBackground(false); // 防止默认白色背景
+    scroll->setStyleSheet(QStringLiteral(
+        "QScrollArea { background: transparent; border: none; }"
+        "QScrollArea > QWidget > QWidget { background: transparent; }"));
+    scroll->verticalScrollBar()->setStyleSheet(QStringLiteral(
+        "QScrollBar:vertical { background: transparent; width: 6px;"
+        " margin: 2px 0; border: none; }"
+        "QScrollBar::handle:vertical { background: #4a4a6a; border: none;"
+        " border-radius: 3px; min-height: 24px; }"
+        "QScrollBar::handle:vertical:hover { background: #6a6a8a; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; width: 0; }"
+        "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }"));
+    m_hotkeyContainer = new QWidget;
+    m_hotkeyLayout = new QVBoxLayout(m_hotkeyContainer);
+    m_hotkeyLayout->setContentsMargins(0, 0, 4, 0);
+    m_hotkeyLayout->setSpacing(6);
+    m_hotkeyLayout->addStretch();
+    scroll->setWidget(m_hotkeyContainer);
+    lay->addWidget(scroll, 1);
+
+    m_stack->addWidget(page);
+}
+
+void MainUI::refreshHotkeyList()
+{
+    // 重建行（保留末尾 stretch）
+    while (m_hotkeyLayout->count() > 1) {
+        QLayoutItem* item = m_hotkeyLayout->takeAt(0);
+        if (QWidget* w = item->widget())
+            w->deleteLater();
+        delete item;
+    }
+
+    const QVector<wb::Item> items = DatabaseManager::instance().queryHotkeyItems();
+    m_hotkeyTip->setText(QStringLiteral(
+                           "⌨ 已绑定 %1 / %2 个快捷键，按下即执行条目操作：文本→复制，其他→打开（"
+                           "窗口隐藏时也生效）。去添加页勾选“支持快捷键”可新增。")
+                       .arg(items.size())
+                       .arg(HotkeyManager::kMaxHotkeys));
+    if (items.isEmpty()) {
+        auto* empty = new QLabel(QStringLiteral("⌨ 还没有快捷键\n\n在添加条目时勾选“支持快捷键”即可绑定"),
+                                m_hotkeyContainer);
+        empty->setAlignment(Qt::AlignCenter);
+        empty->setStyleSheet(QStringLiteral(
+            "background: rgba(255,255,255,0.04); border: 1px dashed rgba(255,255,255,0.12);"
+            " border-radius: 12px; color: #6a6a8a; font-size: 13px; padding: 24px;"));
+        m_hotkeyLayout->insertWidget(0, empty);
+        return;
+    }
+
+    for (const wb::Item& it : items) {
+        auto* row = new QWidget(m_hotkeyContainer);
+        row->setObjectName(QStringLiteral("hkRow")); // 用名字限定规则，不级联到子控件
+        row->setStyleSheet(QStringLiteral(
+            "QWidget#hkRow { background: rgba(255,255,255,0.05);"
+            " border: 1px solid rgba(255,255,255,0.07); border-radius: 10px; }"
+            "QWidget#hkRow:hover { background: rgba(108,92,231,0.1);"
+            " border-color: rgba(108,92,231,0.35); }"));
+        auto* rowLay = new QHBoxLayout(row);
+        rowLay->setContentsMargins(10, 7, 8, 7);
+        rowLay->setSpacing(10);
+
+        // “键帽”样式：让快捷键一眼就能认出来
+        auto* keyLabel = new QLabel(HotkeyManager::toDisplayText(it.shortcut), row);
+        keyLabel->setStyleSheet(QStringLiteral(
+            "background: rgba(108,92,231,0.22); color: #d8d4ff; font-size: 12px;"
+            " font-weight: 700; border: 1px solid rgba(108,92,231,0.45);"
+            " border-radius: 6px; padding: 4px 10px;"));
+
+        QString summary = it.keywords.isEmpty() ? it.content
+                                                : QStringLiteral("%1 · %2").arg(it.keywords, it.content);
+        summary = summary.left(36) + (summary.size() > 36 ? QStringLiteral("…") : QString());
+        auto* descLabel = new QLabel(summary, row);
+        descLabel->setToolTip(it.content); // 悬停看完整内容
+        descLabel->setStyleSheet(QStringLiteral(
+            "background: transparent; color: #e8e8f0; font-size: 12px;"));
+
+        auto* unbindBtn = new QPushButton(QStringLiteral("解除绑定"), row);
+        unbindBtn->setCursor(Qt::PointingHandCursor);
+        unbindBtn->setStyleSheet(QStringLiteral(
+            "QPushButton { background: rgba(255,107,107,0.12); color: #ff8f8f; border: 1px solid"
+            " rgba(255,107,107,0.3); border-radius: 8px; padding: 5px 12px; font-size: 12px; }"
+            "QPushButton:hover { background: rgba(255,107,107,0.28); color: white;"
+            " border-color: rgba(255,107,107,0.5); }"));
+        const qint64 itemId = it.id;
+        connect(unbindBtn, &QPushButton::clicked, this, [this, itemId]() {
+            if (!DatabaseManager::instance().setItemShortcut(itemId, QString())) {
+                showToast(QStringLiteral("❌ 解绑失败"));
+                return;
+            }
+            HotkeyManager::instance().unregisterHotkey(itemId);
+            showToast(QStringLiteral("已解除快捷键绑定（条目保留）"));
+            refreshHotkeyList();
+        });
+
+        rowLay->addWidget(keyLabel);
+        rowLay->addWidget(descLabel, 1);
+        rowLay->addWidget(unbindBtn);
+        m_hotkeyLayout->insertWidget(m_hotkeyLayout->count() - 1, row);
+    }
+}
+
+void MainUI::reloadHotkeys()
+{
+    auto& hk = HotkeyManager::instance();
+    hk.unregisterAll();
+    const QVector<wb::Item> bound = DatabaseManager::instance().queryHotkeyItems();
+    // 启动阶段注册失败（被其他程序占用等）只记日志：条目在管理页里可见，用户可解绑重绑
+    for (const wb::Item& it : bound) {
+        QString err;
+        if (!hk.registerHotkey(it.id, it.shortcut, &err)) {
+            qWarning() << "[hotkey] register" << it.shortcut << "failed:" << err;
+        }
+    }
+}
+
+void MainUI::onHotkeyTriggered(qint64 itemId)
+{
+    wb::Item item;
+    if (!DatabaseManager::instance().itemById(itemId, &item)) {
+        // 条目已删除或变成了加密项：释放热键，别让它白白占位
+        HotkeyManager::instance().unregisterHotkey(itemId);
+        return;
+    }
+    // 与列表里的点击行为一致：文本复制，其他类型打开
+    if (item.type == wb::ItemType::Text)
+        onCopyItem(item);
+    else
+        onOpenItem(item);
 }
 
 void MainUI::showCentered()

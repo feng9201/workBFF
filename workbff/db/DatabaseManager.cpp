@@ -20,6 +20,37 @@ DatabaseManager& DatabaseManager::instance()
     return s_instance;
 }
 
+namespace {
+// 从当前查询行构造 Item，列顺序固定为：
+// id,keywords,content,type,encrypted,priority,display_priority,shortcut
+// 加密条目在密钥为空或解密失败时返回 false（调用方跳过，不能把密文当明文用）
+bool itemFromRow(const QSqlQuery& q, const QByteArray& aesKey, wb::Item* out)
+{
+    wb::Item item;
+    item.id = q.value(0).toLongLong();
+    item.keywords = q.value(1).toString();
+    item.type = wb::stringToItemType(q.value(3).toString());
+    item.encrypted = q.value(4).toInt() != 0;
+    item.priority = q.value(5).toInt();
+    item.displayPriority = q.value(6).toInt();
+    item.shortcut = q.value(7).toString();
+    if (item.encrypted) {
+        if (aesKey.isEmpty())
+            return false; // 未登录：隐藏加密条目
+        const QByteArray cipher = QByteArray::fromBase64(q.value(2).toString().toLatin1());
+        const QByteArray plain = AesCipher::decrypt(cipher, aesKey);
+        if (plain.isEmpty())
+            return false; // 解密失败（密钥不符）
+        item.content = QString::fromUtf8(plain);
+    } else {
+        item.content = q.value(2).toString();
+    }
+    if (out)
+        *out = item;
+    return true;
+}
+} // namespace
+
 QString DatabaseManager::dbPath() const
 {
     // 用户个人目录：%LOCALAPPDATA%\workbff\workbff.db
@@ -59,6 +90,7 @@ bool DatabaseManager::init()
         " priority INTEGER NOT NULL DEFAULT 1,"
         " display_priority INTEGER NOT NULL DEFAULT 1,"
         " encrypted INTEGER NOT NULL DEFAULT 0,"
+        " shortcut TEXT NOT NULL DEFAULT '',"
         " created_at TEXT DEFAULT (datetime('now','localtime')))"));
     if (!ok) {
         qWarning() << "[db] create items failed:" << q.lastError().text();
@@ -84,6 +116,8 @@ bool DatabaseManager::init()
                      QStringLiteral("priority INTEGER NOT NULL DEFAULT 1"));
         ensureColumn(QStringLiteral("display_priority"),
                      QStringLiteral("display_priority INTEGER NOT NULL DEFAULT 1"));
+        ensureColumn(QStringLiteral("shortcut"),
+                     QStringLiteral("shortcut TEXT NOT NULL DEFAULT ''"));
     }
 
     ok = q.exec(QStringLiteral(
@@ -159,7 +193,7 @@ bool DatabaseManager::verifyPassword(const QString& password) const
     return stored == computed;
 }
 
-bool DatabaseManager::addItem(const wb::Item& item, const QByteArray& aesKey)
+bool DatabaseManager::addItem(const wb::Item& item, const QByteArray& aesKey, qint64* newId)
 {
     QString content = item.content;
     if (item.encrypted && !aesKey.isEmpty()) {
@@ -173,15 +207,20 @@ bool DatabaseManager::addItem(const wb::Item& item, const QByteArray& aesKey)
 
     QSqlQuery q(database());
     q.prepare(QStringLiteral(
-        "INSERT INTO items(keywords,content,type,priority,display_priority,encrypted) "
-        "VALUES(:kw,:c,:t,:p,:dp,:e)"));
+        "INSERT INTO items(keywords,content,type,priority,display_priority,encrypted,shortcut) "
+        "VALUES(:kw,:c,:t,:p,:dp,:e,:hk)"));
     q.bindValue(QStringLiteral(":kw"), item.keywords);
     q.bindValue(QStringLiteral(":c"), content);
     q.bindValue(QStringLiteral(":t"), wb::itemTypeToString(item.type));
     q.bindValue(QStringLiteral(":p"), item.priority);
     q.bindValue(QStringLiteral(":dp"), item.displayPriority);
     q.bindValue(QStringLiteral(":e"), item.encrypted ? 1 : 0);
-    return q.exec();
+    q.bindValue(QStringLiteral(":hk"), item.shortcut);
+    if (!q.exec())
+        return false;
+    if (newId)
+        *newId = q.lastInsertId().toLongLong();
+    return true;
 }
 
 QVector<wb::Item> DatabaseManager::queryItems(const QString& filter, const QByteArray& aesKey)
@@ -194,7 +233,7 @@ QVector<wb::Item> DatabaseManager::queryItems(const QString& filter, const QByte
         QRegularExpression(QStringLiteral("[\\s,，;；]+")), Qt::SkipEmptyParts);
 
     QString sql = QStringLiteral(
-        "SELECT id,keywords,content,type,encrypted,priority,display_priority FROM items");
+        "SELECT id,keywords,content,type,encrypted,priority,display_priority,shortcut FROM items");
     if (kws.isEmpty()) {
         // 搜索框为空：只显示第 1 级，级内按显示优先级 1→5 排序（同级最新在前）
         sql += QStringLiteral(" WHERE priority = 1"
@@ -221,26 +260,64 @@ QVector<wb::Item> DatabaseManager::queryItems(const QString& filter, const QByte
 
     while (q.next()) {
         wb::Item item;
-        item.id = q.value(0).toLongLong();
-        item.keywords = q.value(1).toString();
-        item.type = wb::stringToItemType(q.value(3).toString());
-        item.encrypted = q.value(4).toInt() != 0;
-        item.priority = q.value(5).toInt();
-        item.displayPriority = q.value(6).toInt();
-        if (item.encrypted) {
-            if (aesKey.isEmpty())
-                continue; // 未登录：隐藏加密条目
-            const QByteArray cipher = QByteArray::fromBase64(q.value(2).toString().toLatin1());
-            const QByteArray plain = AesCipher::decrypt(cipher, aesKey);
-            if (plain.isEmpty())
-                continue; // 解密失败（密钥不符），跳过
-            item.content = QString::fromUtf8(plain);
-        } else {
-            item.content = q.value(2).toString();
-        }
+        if (!itemFromRow(q, aesKey, &item))
+            continue;
         result.append(item);
     }
     return result;
+}
+
+QVector<wb::Item> DatabaseManager::queryHotkeyItems()
+{
+    QVector<wb::Item> result;
+    QSqlQuery q(database());
+    // 快捷键条目按定义不加密（与加密互斥），所以空 key 也能拿到明文
+    q.prepare(QStringLiteral(
+        "SELECT id,keywords,content,type,encrypted,priority,display_priority,shortcut FROM items"
+        " WHERE shortcut <> '' ORDER BY shortcut ASC"));
+    if (!q.exec()) {
+        qWarning() << "[db] query hotkeys failed:" << q.lastError().text();
+        return result;
+    }
+    while (q.next()) {
+        wb::Item item;
+        if (!itemFromRow(q, QByteArray(), &item))
+            continue;
+        result.append(item);
+    }
+    return result;
+}
+
+bool DatabaseManager::itemById(qint64 id, wb::Item* out)
+{
+    QSqlQuery q(database());
+    q.prepare(QStringLiteral(
+        "SELECT id,keywords,content,type,encrypted,priority,display_priority,shortcut FROM items"
+        " WHERE id=:id"));
+    q.bindValue(QStringLiteral(":id"), id);
+    if (!q.exec() || !q.next())
+        return false;
+    return itemFromRow(q, QByteArray(), out);
+}
+
+bool DatabaseManager::shortcutExists(const QString& shortcut, qint64 excludeId)
+{
+    if (shortcut.isEmpty())
+        return false;
+    QSqlQuery q(database());
+    q.prepare(QStringLiteral("SELECT 1 FROM items WHERE shortcut=:hk AND id<>:ex LIMIT 1"));
+    q.bindValue(QStringLiteral(":hk"), shortcut);
+    q.bindValue(QStringLiteral(":ex"), excludeId);
+    return q.exec() && q.next();
+}
+
+bool DatabaseManager::setItemShortcut(qint64 id, const QString& shortcut)
+{
+    QSqlQuery q(database());
+    q.prepare(QStringLiteral("UPDATE items SET shortcut=:hk WHERE id=:id"));
+    q.bindValue(QStringLiteral(":hk"), shortcut);
+    q.bindValue(QStringLiteral(":id"), id);
+    return q.exec();
 }
 
 bool DatabaseManager::removeItem(qint64 id)
