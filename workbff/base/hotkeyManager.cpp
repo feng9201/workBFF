@@ -293,21 +293,25 @@ bool HotkeyManager::registerHotkey(qint64 itemId, const QString& shortcut, QStri
 void HotkeyManager::unregisterHotkey(qint64 itemId)
 {
     const int id = m_itemToId.value(itemId, 0);
-    if (id == 0)
+    if (id == 0) {
+        qInfo() << "[hotkey] unregister itemId=" << itemId << "本来就没注册（可能是启动时就没注册上）";
         return;
+    }
     m_itemToId.remove(itemId);
     m_idToItem.remove(id);
     if (m_windowCreated)
         ::UnregisterHotKey(msgHwnd(m_msgWindow), id);
+    qInfo() << "[hotkey] unregistered itemId=" << itemId << "id=" << id;
 }
 
 void HotkeyManager::unregisterAll()
 {
-    if (m_windowCreated) {
+    if (m_windowCreated && !m_idToItem.isEmpty()) {
         HWND hwnd = msgHwnd(m_msgWindow);
         for (int id : m_idToItem.keys())
             ::UnregisterHotKey(hwnd, id);
     }
+    qInfo() << "[hotkey] unregisterAll, 释放了" << m_idToItem.size() << "个";
     m_idToItem.clear();
     m_itemToId.clear();
 }

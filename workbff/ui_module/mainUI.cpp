@@ -116,7 +116,15 @@ MainUI::MainUI(QWidget* parent)
     connect(m_hideTimer, &QTimer::timeout, this, &MainUI::hide);
 }
 
-MainUI::~MainUI() = default;
+MainUI::~MainUI()
+{
+    // 悬浮提示是无 parent 的顶层窗口，不归本对象管，需手动释放
+    if (m_hkToast) {
+        m_hkToast->hide();
+        delete m_hkToast;
+        m_hkToast = nullptr;
+    }
+}
 
 void MainUI::paintEvent(QPaintEvent*)
 {
@@ -310,18 +318,25 @@ void MainUI::buildAddPage()
     connect(m_addPanel, &AddPanel::hintRequested, this, &MainUI::showToast);
     connect(m_addPanel, &AddPanel::itemCreated, this, [this](const wb::Item& item) {
         auto& db = DatabaseManager::instance();
+        // 落一条录入日志：远程排查“保存不了”时能看清到底提交了什么、卡在哪一步
+        qInfo() << "[add] save request:" << item.keywords << "type="
+                << wb::itemTypeToString(item.type) << "encrypted=" << item.encrypted
+                << "shortcut=" << item.shortcut << "content=" << item.content;
         if (item.encrypted && m_aesKey.isEmpty()) {
+            qWarning() << "[add] rejected: 加密条目但未登录（无密钥）";
             showToast(QStringLiteral("🔒 加密内容需要先设置/登录密码"));
             return;
         }
         // 快捷键：数量与重复在入库前拦，注册失败则回滚绑定
         if (!item.shortcut.isEmpty()) {
             if (db.queryHotkeyItems().size() >= HotkeyManager::kMaxHotkeys) {
+                qWarning() << "[add] rejected: 快捷键已达上限" << HotkeyManager::kMaxHotkeys;
                 showToast(QStringLiteral("⌨ 最多只能设置 %1 个快捷键，请先在「快捷键管理」里删除一个")
                               .arg(HotkeyManager::kMaxHotkeys));
                 return;
             }
             if (db.shortcutExists(item.shortcut)) {
+                qWarning() << "[add] rejected: 快捷键重复" << item.shortcut;
                 showToast(QStringLiteral("⌨ %1 已被其他条目使用")
                               .arg(HotkeyManager::toDisplayText(item.shortcut)));
                 return;
@@ -330,9 +345,11 @@ void MainUI::buildAddPage()
 
         qint64 newId = -1;
         if (!db.addItem(item, m_aesKey, &newId)) {
-            showToast(QStringLiteral("❌ 保存失败"));
+            // 具体 SQL 错误由 DatabaseManager 写进日志（[db] addItem failed）
+            showToast(QStringLiteral("❌ 保存失败，原因已写入日志"));
             return;
         }
+        qInfo() << "[add] saved, id=" << newId;
         if (item.shortcut.isEmpty()) {
             m_addPanel->reset();
             showToast(QStringLiteral("✅ 添加成功"));
@@ -422,6 +439,8 @@ void MainUI::onDeleteItem(const wb::Item& item)
         HotkeyManager::instance().unregisterHotkey(item.id); // 条目没了，热键跟着释放
         showToast(QStringLiteral("已删除: %1").arg(item.content));
         refreshList();
+    } else {
+        showToast(QStringLiteral("❌ 删除失败，原因已写入日志"));
     }
 }
 
@@ -604,7 +623,8 @@ void MainUI::refreshHotkeyList()
         const qint64 itemId = it.id;
         connect(unbindBtn, &QPushButton::clicked, this, [this, itemId]() {
             if (!DatabaseManager::instance().setItemShortcut(itemId, QString())) {
-                showToast(QStringLiteral("❌ 解绑失败"));
+                // 具体 SQL 错误由 DatabaseManager 写进日志（[db] setItemShortcut failed）
+                showToast(QStringLiteral("❌ 解绑失败，原因已写入日志"));
                 return;
             }
             HotkeyManager::instance().unregisterHotkey(itemId);
@@ -637,15 +657,24 @@ void MainUI::onHotkeyTriggered(qint64 itemId)
 {
     wb::Item item;
     if (!DatabaseManager::instance().itemById(itemId, &item)) {
-        // 条目已删除或变成了加密项：释放热键，别让它白白占位
+        // 条目已删除或变成了加密项（未登录解不出明文）：释放热键，别让它白白占位
+        qWarning() << "[hotkey] itemId=" << itemId << "查不到条目（已删除或加密未登录），自动解绑";
         HotkeyManager::instance().unregisterHotkey(itemId);
+        showFloatingHint(QStringLiteral("⌨ 这个快捷键的条目已不可用，绑定已释放"));
         return;
     }
     // 与列表里的点击行为一致：文本复制，其他类型打开
-    if (item.type == wb::ItemType::Text)
+    if (item.type == wb::ItemType::Text) {
         onCopyItem(item);
-    else
+        qInfo() << "[hotkey] item" << itemId << "type=text → 已复制到剪贴板";
+        showFloatingHint(QStringLiteral("⌨ 已复制：%1")
+                             .arg(item.content.left(60)
+                                  + (item.content.size() > 60 ? QStringLiteral("…") : QString())));
+    } else {
         onOpenItem(item);
+        qInfo() << "[hotkey] item" << itemId << "type=" << wb::itemTypeToString(item.type) << "→ 已请求打开";
+        showFloatingHint(QStringLiteral("⌨ 已执行打开：%1").arg(item.content.left(60)));
+    }
 }
 
 void MainUI::showCentered()
@@ -664,6 +693,41 @@ void MainUI::hideWindow()
 {
     m_hideTimer->stop();
     hide();
+}
+
+void MainUI::showFloatingHint(const QString& msg)
+{
+    if (!m_hkToast) {
+        // 无 parent + Tool/置顶/不抢焦点：只做反馈，不能影响用户当前正在输入的程序
+        m_hkToast = new QLabel(QString(), nullptr,
+                               Qt::Tool | Qt::FramelessWindowHint
+                               | Qt::WindowStaysOnTopHint | Qt::WindowDoesNotAcceptFocus);
+        m_hkToast->setAttribute(Qt::WA_ShowWithoutActivating);
+        // 不用 border-radius：顶层窗口未开透明，圆角外会露出一圈默认浅灰背景
+        m_hkToast->setStyleSheet(QStringLiteral(
+            "background: rgba(40,40,70,0.96); color: #e8e8f0;"
+            " border: 1px solid rgba(108,92,231,0.7);"
+            " padding: 6px 14px; font-size: 13px;"));
+        m_hkToastTimer = new QTimer(m_hkToast);
+        m_hkToastTimer->setSingleShot(true);
+        connect(m_hkToastTimer, &QTimer::timeout, m_hkToast, &QWidget::hide);
+    }
+
+    m_hkToast->setText(msg);
+    m_hkToast->adjustSize();
+    // 靠鼠标位置弹出（按热键时用户注意力在这里），并限制在屏幕可用区内
+    const QPoint pos = QCursor::pos();
+    const QRect sg = QGuiApplication::primaryScreen()->availableGeometry();
+    int x = pos.x() + 16;
+    int y = pos.y() + 22;
+    if (x + m_hkToast->width() > sg.right())
+        x = sg.right() - m_hkToast->width() - 8;
+    if (y + m_hkToast->height() > sg.bottom())
+        y = pos.y() - m_hkToast->height() - 10;
+    m_hkToast->move(qMax(sg.left(), x), qMax(sg.top(), y));
+    m_hkToast->show();
+    m_hkToast->raise();
+    m_hkToastTimer->start(1600);
 }
 
 void MainUI::showToast(const QString& msg)

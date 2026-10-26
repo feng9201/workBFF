@@ -79,6 +79,7 @@ bool DatabaseManager::init()
         qWarning() << "[db] open failed:" << db.lastError().text();
         return false;
     }
+    qInfo() << "[db] opened" << dbPath(); // 现场排查用：确认用的是哪个库文件
 
     QSqlQuery q(db);
     bool ok = q.exec(QStringLiteral(
@@ -206,9 +207,12 @@ bool DatabaseManager::addItem(const wb::Item& item, const QByteArray& aesKey, qi
     }
 
     QSqlQuery q(database());
+    // shortcut 列是 NOT NULL，而未勾选快捷键时 item.shortcut 是默认构造的 QString()——
+    // 它是“null 串”而不是“空串”，Qt SQL 会绑成 SQL NULL 并撞上约束导致整条插入失败，
+    // 所以在 SQL 里用 COALESCE 把 NULL 统一落成空串
     q.prepare(QStringLiteral(
         "INSERT INTO items(keywords,content,type,priority,display_priority,encrypted,shortcut) "
-        "VALUES(:kw,:c,:t,:p,:dp,:e,:hk)"));
+        "VALUES(:kw,:c,:t,:p,:dp,:e,COALESCE(:hk,''))"));
     q.bindValue(QStringLiteral(":kw"), item.keywords);
     q.bindValue(QStringLiteral(":c"), content);
     q.bindValue(QStringLiteral(":t"), wb::itemTypeToString(item.type));
@@ -216,8 +220,11 @@ bool DatabaseManager::addItem(const wb::Item& item, const QByteArray& aesKey, qi
     q.bindValue(QStringLiteral(":dp"), item.displayPriority);
     q.bindValue(QStringLiteral(":e"), item.encrypted ? 1 : 0);
     q.bindValue(QStringLiteral(":hk"), item.shortcut);
-    if (!q.exec())
+    if (!q.exec()) {
+        // 保存失败必须落日志：现场往往是旧库结构/文件权限问题，不看日志无法定位
+        qWarning() << "[db] addItem failed:" << q.lastError().text() << "db=" << dbPath();
         return false;
+    }
     if (newId)
         *newId = q.lastInsertId().toLongLong();
     return true;
@@ -314,10 +321,16 @@ bool DatabaseManager::shortcutExists(const QString& shortcut, qint64 excludeId)
 bool DatabaseManager::setItemShortcut(qint64 id, const QString& shortcut)
 {
     QSqlQuery q(database());
-    q.prepare(QStringLiteral("UPDATE items SET shortcut=:hk WHERE id=:id"));
+    // 同上：解绑传进来的是 null QString，靠 COALESCE 落成空串，否则 UPDATE 会被 NOT NULL 拒掉
+    q.prepare(QStringLiteral("UPDATE items SET shortcut=COALESCE(:hk,'') WHERE id=:id"));
     q.bindValue(QStringLiteral(":hk"), shortcut);
     q.bindValue(QStringLiteral(":id"), id);
-    return q.exec();
+    if (!q.exec()) {
+        qWarning() << "[db] setItemShortcut failed:" << q.lastError().text()
+                   << "id=" << id << "db=" << dbPath();
+        return false;
+    }
+    return true;
 }
 
 bool DatabaseManager::removeItem(qint64 id)
@@ -325,5 +338,10 @@ bool DatabaseManager::removeItem(qint64 id)
     QSqlQuery q(database());
     q.prepare(QStringLiteral("DELETE FROM items WHERE id=:id"));
     q.bindValue(QStringLiteral(":id"), id);
-    return q.exec();
+    if (!q.exec()) {
+        qWarning() << "[db] removeItem failed:" << q.lastError().text()
+                   << "id=" << id << "db=" << dbPath();
+        return false;
+    }
+    return true;
 }

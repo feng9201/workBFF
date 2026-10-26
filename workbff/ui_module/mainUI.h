@@ -68,6 +68,9 @@ private:
     void refreshHotkeyList();
     // 按数据库内容重建全部热键注册（启动时调用）
     void reloadHotkeys();
+    // 全局快捷键触发时的独立悬浮反馈：主界面此时通常是隐藏的，
+    // 画在主界面里的 toast 等于没提示，故用一个置顶不抢焦的小窗跟随鼠标显示
+    void showFloatingHint(const QString& msg);
     void hideWindow();
 
     TitleBar* m_titleBar = nullptr;
@@ -84,6 +87,8 @@ private:
     QLabel* m_hotkeyTip = nullptr;         // 顶部说明（含已绑定数量）
     QLabel* m_toast = nullptr;
     QTimer* m_toastTimer = nullptr;
+    QLabel* m_hkToast = nullptr;   // 顶层悬浮提示（无 parent，才能当独立窗口）
+    QTimer* m_hkToastTimer = nullptr;
 
     bool m_dragging = false;
     QPoint m_dragOffset;

@@ -4,6 +4,7 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDebug>
 #include <QEvent>
 #include <QFileDialog>
 #include <QFrame>
@@ -345,14 +346,17 @@ void AddPanel::onSave()
     const QString content = m_content->toPlainText().trimmed();
 
     if (keywords.isEmpty()) {
+        qWarning() << "[add] rejected: 关键词为空";
         emit hintRequested(QStringLiteral("请至少填写一个搜索关键词"));
         return;
     }
     if (content.isEmpty()) {
+        qWarning() << "[add] rejected: 内容为空";
         emit hintRequested(QStringLiteral("请填写内容"));
         return;
     }
     if (m_hotkeyEnabled->isChecked() && m_hotkeyValue.isEmpty()) {
+        qWarning() << "[add] rejected: 勾选了快捷键但未录制";
         emit hintRequested(QStringLiteral("请先录制快捷键：点击输入框后按下组合键"));
         return;
     }
